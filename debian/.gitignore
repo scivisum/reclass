@@ -1,0 +1,8 @@
+/reclass
+/reclass-doc
+/python-reclass
+/tmp
+/*.log
+/*.debhelper
+/files
+/*.substvars
