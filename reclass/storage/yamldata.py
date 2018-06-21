@@ -6,10 +6,17 @@
 # Copyright © 2007–14 martin f. krafft <madduck@madduck.net>
 # Released under the terms of the Artistic Licence 2.0
 #
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
 from reclass import datatypes
 import yaml
 import os
 from reclass.errors import NotFoundError
+
+_SafeLoader = yaml.CSafeLoader if yaml.__with_libyaml__ else yaml.SafeLoader
 
 class YamlData(object):
 
@@ -23,7 +30,7 @@ class YamlData(object):
             raise NotFoundError('Cannot open: %s' % abs_path)
         y = cls('yaml_fs://{0}'.format(abs_path))
         with open(abs_path) as fp:
-            data = yaml.safe_load(fp)
+            data = yaml.load(fp, Loader=_SafeLoader)
             if data is not None:
                 y._data = data
         return y
@@ -32,7 +39,7 @@ class YamlData(object):
     def from_string(cls, string, uri):
         ''' Initialise yaml data from a string '''
         y = cls(uri)
-        data = yaml.safe_load(string)
+        data = yaml.load(string, Loader=_SafeLoader)
         if data is not None:
             y._data = data
         return y

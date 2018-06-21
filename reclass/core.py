@@ -6,6 +6,10 @@
 # Copyright © 2007–14 martin f. krafft <madduck@madduck.net>
 # Released under the terms of the Artistic Licence 2.0
 #
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
 
 import copy
 import time
@@ -21,15 +25,13 @@ from six import iteritems
 from reclass.settings import Settings
 from reclass.output.yaml_outputter import ExplicitDumper
 from reclass.datatypes import Entity, Classes, Parameters, Exports
-from reclass.errors import MappingFormatError, ClassNotFound, InvQueryClassNotFound, InvQueryError, InterpolationError
+from reclass.errors import MappingFormatError, ClassNameResolveError, ClassNotFound, InvQueryClassNameResolveError, InvQueryClassNotFound, InvQueryError, InterpolationError, ResolveError
 from reclass.values.parser import Parser
 
-try:
-    basestring
-except NameError:
-    basestring = str
 
 class Core(object):
+
+    _parser = Parser()
 
     def __init__(self, storage, class_mappings, settings, input_data=None):
         self._storage = storage
@@ -99,7 +101,7 @@ class Core(object):
         p = Parameters(self._input_data, self._settings)
         return Entity(self._settings, parameters=p, name='input data')
 
-    def _recurse_entity(self, entity, merge_base=None, seen=None, nodename=None, environment=None):
+    def _recurse_entity(self, entity, merge_base=None, context=None, seen=None, nodename=None, environment=None):
 
         # values/parser in order to interpolate references in classes
         _parser = Parser()
@@ -113,9 +115,22 @@ class Core(object):
         if merge_base is None:
             merge_base = Entity(self._settings, name='empty (@{0})'.format(nodename))
 
+        if context is None:
+            context = Entity(self._settings, name='empty (@{0})'.format(nodename))
+
         for klass in entity.classes.as_list():
-            if merge_base is not None:
-               klass=str(_parser.parse(klass, self._settings).render(merge_base.parameters.as_dict(), {}))
+
+            #if merge_base is not None:
+            #   klass=str(_parser.parse(klass, self._settings).render(merge_base.parameters.as_dict(), {}))
+            
+            if klass.count('$') > 0:
+                try:
+                    klass = str(self._parser.parse(klass, self._settings).render(merge_base.parameters.as_dict(), {}))
+                except ResolveError as e:
+                    try:
+                        klass = str(self._parser.parse(klass, self._settings).render(context.parameters.as_dict(), {}))
+                    except ResolveError as e:
+                        raise ClassNameResolveError(klass, nodename, entity.uri)
             # class not seen or class on a list of global classes (always (re)loaded)
             if klass not in seen or self._gcl_r.match(klass):
                 try:
@@ -125,13 +140,13 @@ class Core(object):
                         if self._cnf_r.match(klass):
                             if self._settings.ignore_class_notfound_warning:
                                 # TODO, add logging handler
-                                print >>sys.stderr, "[WARNING] Reclass class not found: '%s'. Skipped!" % klass
+                                print("[WARNING] Reclass class not found: '%s'. Skipped!" % klass, file=sys.stderr)
                             continue
                     e.nodename = nodename
                     e.uri = entity.uri
                     raise
 
-                descent = self._recurse_entity(class_entity, seen=seen,
+                descent = self._recurse_entity(class_entity, context=merge_base, seen=seen,
                                                nodename=nodename, environment=environment)
                 # on every iteration, we merge the result of the recursive
                 # descent into what we have so far…
@@ -146,7 +161,7 @@ class Core(object):
 
     def _get_automatic_parameters(self, nodename, environment):
         if self._settings.automatic_parameters:
-            return Parameters({ '_reclass_': { 'name': { 'full': nodename, 'short': str.split(nodename, '.')[0] },
+            return Parameters({ '_reclass_': { 'name': { 'full': nodename, 'short': nodename.split('.')[0] },
                                                'environment': environment } }, self._settings, '__auto__')
         else:
             return Parameters({}, self._settings, '')
@@ -169,6 +184,8 @@ class Core(object):
                     node = self._node_entity(nodename)
                 except ClassNotFound as e:
                     raise InvQueryClassNotFound(e)
+                except ClassNameResolveError as e:
+                    raise InvQueryClassNameResolveError(e)
                 if queries is None:
                     try:
                         node.interpolate_exports()
@@ -196,8 +213,8 @@ class Core(object):
         seen = {}
         merge_base = self._recurse_entity(base_entity, seen=seen, nodename=nodename,
                                           environment=node_entity.environment)
-        return self._recurse_entity(node_entity, merge_base, seen=seen, nodename=nodename,
-                                    environment=node_entity.environment)
+        return self._recurse_entity(node_entity, merge_base=merge_base, context=merge_base, seen=seen,
+                                    nodename=nodename, environment=node_entity.environment)
 
     def _nodeinfo(self, nodename, inventory):
         try:

@@ -7,6 +7,16 @@
 # Released under the terms of the Artistic Licence 2.0
 #
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
+#try:
+#    from types import StringTypes
+#except ImportError:
+#    StringTypes = (str, )
+
 import copy
 import sys
 import types
@@ -44,7 +54,7 @@ class Parameters(object):
     functionality and does not try to be a really mapping object.
     '''
 
-    def __init__(self, mapping, settings, uri, merge_initialise = True):
+    def __init__(self, mapping, settings, uri, parse_strings=True):
         self._settings = settings
         self._base = {}
         self._uri = uri
@@ -54,14 +64,12 @@ class Parameters(object):
         self._resolve_errors = ResolveErrorList()
         self._needs_all_envs = False
         self._keep_overrides = False
+        self._parse_strings = parse_strings
         if mapping is not None:
-            if merge_initialise:
-                # we initialise by merging
-                self._keep_overrides = True
-                self.merge(mapping)
-                self._keep_overrides = False
-            else:
-                self._base = copy.deepcopy(mapping)
+            # we initialise by merging
+            self._keep_overrides = True
+            self.merge(mapping)
+            self._keep_overrides = False
 
     #delimiter = property(lambda self: self._delimiter)
 
@@ -103,7 +111,7 @@ class Parameters(object):
             return value
         else:
             try:
-                return Value(value, self._settings, self._uri)
+                return Value(value, self._settings, self._uri, parse_string=self._parse_strings)
             except InterpolationError as e:
                 e.context = str(path)
                 raise
@@ -132,7 +140,8 @@ class Parameters(object):
         elif isinstance(new, ValueList):
             values.extend(new)
         else:
-            values.append(Value(new, self._settings, self._uri))
+            values.append(Value(new, self._settings, self._uri, parse_string=self._parse_strings))
+            
         return values
 
     def _merge_dict(self, cur, new, path):
@@ -157,6 +166,9 @@ class Parameters(object):
         ret = cur
         for (key, newvalue) in iteritems(new):
             if key.startswith(self._settings.dict_key_override_prefix) and not self._keep_overrides:
+                if not isinstance(newvalue, Value):
+                    newvalue = Value(newvalue, self._settings, self._uri, parse_string=self._parse_strings)
+                newvalue.overwrite = True
                 ret[key.lstrip(self._settings.dict_key_override_prefix)] = newvalue
             else:
                 ret[key] = self._merge_recurse(ret.get(key), newvalue, path.new_subpath(key))
@@ -189,7 +201,7 @@ class Parameters(object):
         else:
             return self._update_value(cur, new)
 
-    def merge(self, other, wrap=True):
+    def merge(self, other):
         """Merge function (public edition).
 
         Call _merge_recurse on self with either another Parameter object or a
@@ -205,15 +217,9 @@ class Parameters(object):
 
         self._unrendered = None
         if isinstance(other, dict):
-            if wrap:
-                wrapped = self._wrap_dict(other, DictPath(self._settings.delimiter))
-            else:
-                wrapped = copy.deepcopy(other)
+            wrapped = self._wrap_dict(other, DictPath(self._settings.delimiter))
         elif isinstance(other, self.__class__):
-            if wrap:
-                wrapped = self._wrap_dict(other._base, DictPath(self._settings.delimiter))
-            else:
-                wrapped = copy.deepcopy(other._base)
+            wrapped = self._wrap_dict(other._base, DictPath(self._settings.delimiter))
         else:
             raise TypeError('Cannot merge %s objects into %s' % (type(other),
                             self.__class__.__name__))

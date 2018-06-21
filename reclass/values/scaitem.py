@@ -3,6 +3,10 @@
 #
 # This file is part of reclass
 #
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
 
 from reclass.settings import Settings
 from .item import Item
@@ -18,7 +22,7 @@ class ScaItem(Item):
         return self._value
 
     def merge_over(self, item):
-        if item.type == Item.SCALAR:
+        if item.type == Item.SCALAR or item.type == Item.COMPOSITE:
             return self
         elif item.type == Item.LIST:
             if self._settings.allow_scalar_over_list or (self._settings.allow_none_override and self._value is None):

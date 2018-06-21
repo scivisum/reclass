@@ -6,6 +6,10 @@
 # Copyright © 2007–14 martin f. krafft <madduck@madduck.net>
 # Released under the terms of the Artistic Licence 2.0
 #
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
 
 import copy
 
@@ -15,6 +19,7 @@ from reclass.settings import Settings
 from reclass.datatypes import Parameters
 from reclass.errors import InfiniteRecursionError, InterpolationError, ResolveError, ResolveErrorList
 import unittest
+
 try:
     import unittest.mock as mock
 except ImportError:
@@ -642,6 +647,39 @@ class TestParametersNoMock(unittest.TestCase):
         p1.merge(p2)
         p1.interpolate()
         self.assertEqual(p1.as_dict(), r)
+
+    def test_complex_overwrites_1(self):
+        # find a better name for this test
+        p1 = Parameters({ 'test': { 'dict': { 'a': '${values:one}', 'b': '${values:two}' } },
+                          'values': { 'one': 1, 'two': 2, 'three': { 'x': 'X', 'y': 'Y' } } }, SETTINGS, '')
+        p2 = Parameters({ 'test': { 'dict': { 'c': '${values:two}' } } }, SETTINGS, '')
+        p3 = Parameters({ 'test': { 'dict': { '~b': '${values:three}' } } }, SETTINGS, '')
+        r = {'test': {'dict': {'a': 1, 'b': {'x': 'X', 'y': 'Y'}, 'c': 2}}, 'values': {'one': 1, 'three': {'x': 'X', 'y': 'Y'}, 'two': 2} }
+        p2.merge(p3)
+        p1.merge(p2)
+        p1.interpolate()
+        self.assertEqual(p1.as_dict(), r)
+
+    def test_escaped_string_overwrites(self):
+        p1 = Parameters({ 'test': '\${not_a_ref}' }, SETTINGS, '')
+        p2 = Parameters({ 'test': '\${also_not_a_ref}' }, SETTINGS, '')
+        r = { 'test': '${also_not_a_ref}' }
+        p1.merge(p2)
+        p1.interpolate()
+        self.assertEqual(p1.as_dict(), r)
+
+    def test_escaped_string_in_ref_dict_overwrite(self):
+        p1 = Parameters({'a': { 'one': '\${not_a_ref}' }, 'b': { 'two': '\${also_not_a_ref}' }}, SETTINGS, '')
+        p2 = Parameters({'c': '${a}'}, SETTINGS, '')
+        p3 = Parameters({'c': '${b}'}, SETTINGS, '')
+        p4 = Parameters({'c': { 'one': '\${again_not_a_ref}' } }, SETTINGS, '')
+        r = {'a': {'one': '${not_a_ref}'}, 'b': {'two': '${also_not_a_ref}'}, 'c': {'one': '${again_not_a_ref}', 'two': '${also_not_a_ref}'}}
+        p1.merge(p2)
+        p1.merge(p3)
+        p1.merge(p4)
+        p1.interpolate()
+        self.assertEqual(p1.as_dict(), r)
+
 
 if __name__ == '__main__':
     unittest.main()
