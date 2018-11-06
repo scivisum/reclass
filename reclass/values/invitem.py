@@ -110,8 +110,9 @@ class LogicTest(BaseTestExpression):
         subtests = list(it.compress(expr, it.cycle([1, 1, 1, 0])))
         self._els = [EqualityTest(subtests[j:j+3], self._delimiter)
                      for j in range(0, len(subtests), 3)]
-        self.refs = [x.refs for x in self._els]
-        self.inv_refs = [x.inv_refs for x in self._els]
+        for x in self._els:
+            self.refs.extend(x.refs)
+            self.inv_refs.extend(x.inv_refs)
         try:
             self._ops = [self.known_operators[x[1]] for x in expr[3::4]]
         except KeyError as e:
@@ -134,6 +135,7 @@ class InvItem(item.Item):
     def __init__(self, newitem, settings):
         super(InvItem, self).__init__(newitem.render(None, None), settings)
         self.needs_all_envs = False
+        self.has_inv_query = True
         self.ignore_failed_render = (
                 self._settings.inventory_ignore_failed_render)
         self._parse_expression(self.contents)
@@ -178,15 +180,14 @@ class InvItem(item.Item):
             raise ExpressionError(msg % self._expr_type, tbFlag=False)
 
     @property
-    def has_inv_query(self):
-        return True
-
-    @property
     def has_references(self):
         return len(self._question.refs) > 0
 
     def get_references(self):
         return self._question.refs
+
+    def assembleRefs(self, context):
+        return
 
     def get_inv_references(self):
         return self.inv_refs

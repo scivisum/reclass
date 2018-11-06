@@ -9,8 +9,11 @@ from __future__ import unicode_literals
 
 import collections
 import distutils.version
+import errno
+import fcntl
 import fnmatch
 import os
+import time
 
 # Squelch warning on centos7 due to upgrading cffi
 # see https://github.com/saltstack/salt/pull/39871
@@ -28,8 +31,7 @@ with warnings.catch_warnings():
 from six import iteritems
 
 import reclass.errors
-from reclass.storage import NodeStorageBase
-from reclass.storage.common import NameMangler
+from reclass.storage import ExternalNodeStorageBase
 from reclass.storage.yamldata import YamlData
 
 FILE_EXTENSION = '.yml'
@@ -51,6 +53,7 @@ class GitURI(object):
         self.branch = None
         self.root = None
         self.cache_dir = None
+        self.lock_dir = None
         self.pubkey = None
         self.privkey = None
         self.password = None
@@ -60,6 +63,7 @@ class GitURI(object):
         if 'repo' in dictionary: self.repo = dictionary['repo']
         if 'branch' in dictionary: self.branch = dictionary['branch']
         if 'cache_dir' in dictionary: self.cache_dir = dictionary['cache_dir']
+        if 'lock_dir' in dictionary: self.lock_dir = dictionary['lock_dir']
         if 'pubkey' in dictionary: self.pubkey = dictionary['pubkey']
         if 'privkey' in dictionary: self.privkey = dictionary['privkey']
         if 'password' in dictionary: self.password = dictionary['password']
@@ -73,9 +77,32 @@ class GitURI(object):
         return '<{0}: {1} {2} {3}>'.format(self.__class__.__name__, self.repo, self.branch, self.root)
 
 
-class GitRepo(object):
+class LockFile():
+    def __init__(self, file):
+        self._file = file
 
-    def __init__(self, uri):
+    def __enter__(self):
+        self._fd = open(self._file, 'w+')
+        start = time.time()
+        while True:
+            if (time.time() - start) > 120:
+                raise IOError('Timeout waiting to lock file: {0}'.format(self._file))
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except IOError as e:
+                # raise on unrelated IOErrors
+                if e.errno != errno.EAGAIN:
+                    raise
+                else:
+                    time.sleep(0.1)
+
+    def __exit__(self, type, value, traceback):
+        self._fd.close()
+
+
+class GitRepo(object):
+    def __init__(self, uri, node_name_mangler, class_name_mangler):
         if pygit2 is None:
             raise errors.MissingModuleError('pygit2')
         self.transport, _, self.url = uri.repo.partition('://')
@@ -86,9 +113,18 @@ class GitRepo(object):
             self.cache_dir = '{0}/{1}/{2}'.format(os.path.expanduser("~"), '.reclass/cache/git', self.name)
         else:
             self.cache_dir = '{0}/{1}'.format(uri.cache_dir, self.name)
-
-        self._init_repo(uri)
-        self._fetch()
+        if uri.lock_dir is None:
+            self.lock_file = '{0}/{1}/{2}'.format(os.path.expanduser("~"), '.reclass/cache/lock', self.name)
+        else:
+            self.lock_file = '{0}/{1}'.format(uri.lock_dir, self.name)
+        lock_dir = os.path.dirname(self.lock_file)
+        if not os.path.exists(lock_dir):
+            os.makedirs(lock_dir)
+        self._node_name_mangler = node_name_mangler
+        self._class_name_mangler = class_name_mangler
+        with LockFile(self.lock_file):
+            self._init_repo(uri)
+            self._fetch()
         self.branches = self.repo.listall_branches()
         self.files = self.files_in_repo()
 
@@ -98,10 +134,7 @@ class GitRepo(object):
         else:
             os.makedirs(self.cache_dir)
             self.repo = pygit2.init_repository(self.cache_dir, bare=True)
-
-        if not self.repo.remotes:
             self.repo.create_remote('origin', self.url)
-
         if 'ssh' in self.transport:
             if '@' in self.url:
                 user, _, _ = self.url.partition('@')
@@ -129,7 +162,6 @@ class GitRepo(object):
         if self.credentials is not None:
             origin.credentials = self.credentials
         fetch_results = origin.fetch(**fetch_kwargs)
-
         remote_branches = self.repo.listall_branches(pygit2.GIT_BRANCH_REMOTE)
         local_branches = self.repo.listall_branches()
         for remote_branch_name in remote_branches:
@@ -184,7 +216,8 @@ class GitRepo(object):
                 if fnmatch.fnmatch(file.name, '*{0}'.format(FILE_EXTENSION)):
                     name = os.path.splitext(file.name)[0]
                     relpath = os.path.dirname(file.path)
-                    relpath, name = NameMangler.classes(relpath, name)
+                    if callable(self._class_name_mangler):
+                        relpath, name = self._class_name_mangler(relpath, name)
                     if name in ret:
                         raise reclass.errors.DuplicateNodeNameError(self.name + ' - ' + bname, name, ret[name], path)
                     else:
@@ -197,16 +230,19 @@ class GitRepo(object):
         for (name, file) in iteritems(self.files[branch]):
             if subdir is None or name.startswith(subdir):
                 node_name = os.path.splitext(file.name)[0]
+                relpath = os.path.dirname(file.path)
+                if callable(self._node_name_mangler):
+                    relpath, node_name = self._node_name_mangler(relpath, node_name)
                 if node_name in ret:
                     raise reclass.errors.DuplicateNodeNameError(self.name, name, files[name], path)
                 else:
                     ret[node_name] = file
         return ret
 
-class ExternalNodeStorage(NodeStorageBase):
 
-    def __init__(self, nodes_uri, classes_uri):
-        super(ExternalNodeStorage, self).__init__(STORAGE_NAME)
+class ExternalNodeStorage(ExternalNodeStorageBase):
+    def __init__(self, nodes_uri, classes_uri, compose_node_name):
+        super(ExternalNodeStorage, self).__init__(STORAGE_NAME, compose_node_name)
         self._repos = dict()
 
         if nodes_uri is not None:
@@ -261,7 +297,7 @@ class ExternalNodeStorage(NodeStorageBase):
 
     def _load_repo(self, uri):
         if uri.repo not in self._repos:
-            self._repos[uri.repo] = GitRepo(uri)
+            self._repos[uri.repo] = GitRepo(uri, self.node_name_mangler, self.class_name_mangler)
 
     def _env_to_uri(self, environment):
         ret = None

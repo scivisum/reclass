@@ -53,6 +53,33 @@ class YamlData(object):
     def get_data(self):
         return self._data
 
+    def set_absolute_names(self, name, names):
+        new_names = []
+        for n in names:
+            if n[0] == '.':
+                dots = self.count_dots(n)
+                levels_up = (dots * (-1))
+                parent = '.'.join(name.split('.')[0:levels_up])
+                if parent == '':
+                    n = n[dots:]
+                else:
+                    n = parent + n[dots - 1:]
+            new_names.append(n)
+        return new_names
+
+    def yield_dots(self, value):
+        try:
+            idx = value.index('.')
+        except ValueError:
+            return
+        if idx == 0:
+            yield '.'
+            for dot in self.yield_dots(value[1:]):
+                yield dot
+
+    def count_dots(self, value):
+        return len(list(self.yield_dots(value)))
+
     def get_entity(self, name, settings):
         #if name is None:
         #    name = self._uri
@@ -60,6 +87,7 @@ class YamlData(object):
         classes = self._data.get('classes')
         if classes is None:
             classes = []
+        classes = self.set_absolute_names(name, classes)
         classes = datatypes.Classes(classes)
 
         applications = self._data.get('applications')
